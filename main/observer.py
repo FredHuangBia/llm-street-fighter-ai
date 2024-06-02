@@ -14,16 +14,19 @@ class Observer():
         return
 
     def detect_position_from_color(
-        self, observation: dict, color: list, epsilon=1, save_frame: bool = False
+        self, observation: dict, color: list, epsilon=0.5, save_frame: bool = False, debug_visual: bool = False
     ) -> tuple:
         """
         Convert the observation from pixels to player coordinates.
+
         It works by finding the first pixel that matches the color.
+
         Returns a tuple of (x, y) coordinates.
         - x is between 0 and 384
         - y is between 0 and 224
         """
         frame = observation["frame"]
+        
         # the screen is a np.array of RGB colors (3 channels)
         # Select the frames where the characters play: between 80 vertical and 200 vertical
 
@@ -31,20 +34,33 @@ class Observer():
         if save_frame:
             np.save("observation.npy", frame)
 
-        frame = frame[100:200, :]
+        frame = frame[50:90, :]
 
         # Detect the red color of Ken
         diff = np.linalg.norm(np.array(frame) - np.array(color), axis=2)
         mask = diff < epsilon
 
         # Return the index where the red color is detected
-        coordinates = mask.nonzero()
+        # coordinates = mask.nonzero()
+        coordinates = np.argwhere(mask)
 
-        if len(coordinates[0]) == 0:
+        def calculate_centroid(coordinates):
+            if not coordinates.size:
+                return None
+            centroid = np.mean(coordinates, axis=0).astype(int)
+            return (centroid[1], centroid[0])  # x, y
+
+        # Usage within your detection function
+        centroid = calculate_centroid(coordinates)
+        if centroid:
+            first_match = centroid
+        else:
             return None
 
-        # Add back the vertical offset
-        first_match = (coordinates[1][0], coordinates[0][0] + 100)
+        top_match = coordinates[np.argmin(coordinates[:, 0])]
+
+        # Convert to (x, y)
+        first_match = (top_match[1], top_match[0])
 
         return first_match
 

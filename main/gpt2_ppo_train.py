@@ -134,7 +134,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     reward = 0
     text = batch["response"][0]
     # Hack to make the model learn to attack more
-    if epoch < 10000 and ("punch" in text or "attack" in text or "hit" in text or "strike" in text or "kick" in text):
+    if epoch < 1000 and ("punch" in text or "attack" in text or "hit" in text or "strike" in text or "kick" in text):
         reward += 0.1
     actions = get_llm_actions(text)
     for action in actions:
@@ -152,4 +152,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
-ppo_trainer.save_pretrained("gpt2_finetune")
+    if (epoch % 1000 == 0):
+        print("\nSaving for epoch", epoch)
+        ppo_trainer.save_pretrained("gpt2_finetune")
