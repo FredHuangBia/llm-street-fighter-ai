@@ -17,11 +17,15 @@ import retro
 from stable_baselines3 import PPO
 
 from street_fighter_custom_wrapper import StreetFighterCustomWrapper
+from PIL import Image
+import requests
+from transformers import AutoProcessor, LlavaForConditionalGeneration
+
 
 RESET_ROUND = True  # Whether to reset the round when fight is over. 
 RENDERING = True    # Whether to render the game screen.
 
-MODEL_NAME = r"ppo_ryu_2500000_steps_updated" # Specify the model file to load. Model "ppo_ryu_2500000_steps_updated" is capable of beating the final stage (Bison) of the game.
+MODEL_NAME = r"llava" # Specify the model file to load. Model "ppo_ryu_2500000_steps_updated" is capable of beating the final stage (Bison) of the game.
 
 # Model notes:
 # ppo_ryu_2000000_steps_updated: Just beginning to overfit state, generalizable but not quite capable.
@@ -58,8 +62,36 @@ if not RANDOM_ACTION:
     for k in keys:
         new_attr = getattr(env.observation_space, k).reshape(3,100,128)
         setattr(env.observation_space, k, new_attr)
-    model = PPO.load(os.path.join(MODEL_DIR, MODEL_NAME), env=env,
-                custom_objects = {'observation_space': env.observation_space, 'action_space': env.action_space})
+
+    model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf").to("cuda:0")
+    processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+
+def get_llm_actions(llm_output):
+    llm_output = llm_output.split("ASSISTANT")[1]
+    llm_output = llm_output.lower()
+    actions = [[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]
+    if "left" in llm_output:
+        actions[0][6] = 1.0
+    if "right" in llm_output:
+        actions[0][7] = 1.0
+    if "squad" in llm_output:
+        actions[0][5] = 1.0
+    if "jump" in llm_output:
+        actions[0][4] = 1.0
+    if "punch" in llm_output:
+        actions[0][11] = 1.0
+        actions.append([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
+    if "kick" in llm_output:
+        actions[0][8] = 1.0
+        actions.append([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
+    # jump = [0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0., 0.]
+    # punch = [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    # quick punch = [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    # heavy punch = [0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    # kick = [0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    # quick kick = [0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    # heavy kick = [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    return actions
 
 obs = env.reset()
 done = False
@@ -84,8 +116,17 @@ for _ in range(num_episodes):
         if RANDOM_ACTION:
             obs, reward, done, info = env.step(env.action_space.sample())
         else:
-            action, _states = model.predict(obs)
-            obs, reward, done, info = env.step(action)
+            image = Image.fromarray(obs.astype('uint8'), 'RGB')
+
+            prompt = "USER: <image>\nYou are the white cloth player in street fighter game. Given the game state image, think about where is the opponent and where you are, what is the one best action from {left, right, squad, jump, punch, kick}? ASSISTANT:"
+            inputs = processor(text=prompt, images=image, return_tensors="pt").to("cuda:0")
+
+            output = model.generate(**inputs, max_new_tokens=100)
+            llm_output = processor.decode(output[0], skip_special_tokens=True)
+            print(llm_output)
+            actions = get_llm_actions(llm_output)
+            for action in actions:
+                obs, reward, done, info = env.step(action)
 
         if reward != 0:
             total_reward += reward
