@@ -15,7 +15,7 @@ import retro
 from street_fighter_custom_wrapper import StreetFighterCustomWrapper
 from observer import Observer
 
-MODEL = "gpt2"
+MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 RESET_ROUND = True  # Whether to reset the round when fight is over. 
 RENDERING = False    # Whether to render the game screen.
 def make_env(game, state):
@@ -152,4 +152,4 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
-ppo_trainer.save_pretrained("gpt2_finetune")
+ppo_trainer.save_pretrained("mistral_finetune")
