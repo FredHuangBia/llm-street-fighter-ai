@@ -40,30 +40,13 @@ class Observer():
         # Return the index where the red color is detected
         coordinates = mask.nonzero()
 
-        # if len(coordinates[0]) == 0:
-        #     return None
-
-        # # Add back the vertical offset
-        # first_match = (coordinates[1][0], coordinates[0][0] + 100)
-
-        # return first_match
-        def calculate_centroid(coordinates):
-            if not coordinates.size:
-                return None
-            centroid = np.mean(coordinates, axis=0).astype(int)
-            return (centroid[1], centroid[0])  # x, y
-
-        # Usage within your detection function
-        centroid = calculate_centroid(coordinates)
-        if centroid:
-            first_match = centroid
-        else:
+        if len(coordinates[0]) == 0:
             return None
 
-        top_match = coordinates[np.argmin(coordinates[:, 0])]
+        # Add back the vertical offset
+        first_match = (coordinates[1][0], coordinates[0][0] + 50)
 
-        # Convert to (x, y)
-        first_match = (top_match[1], top_match[0])
+        return first_match
 
     def observe(self, observation: dict):
         """
