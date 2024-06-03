@@ -173,4 +173,5 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
-ppo_trainer.save_pretrained("mistral_finetune")
+    if epoch % 1000 == 0:
+        ppo_trainer.save_pretrained("mistral_finetune")
