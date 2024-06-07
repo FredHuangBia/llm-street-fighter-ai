@@ -35,15 +35,27 @@ game = "StreetFighterIISpecialChampionEdition-Genesis"
 def get_llm_actions(llm_output):
     llm_output = llm_output.lower()
     actions = [[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]
-    if "left" in llm_output:
+    if "move left" in llm_output:
         actions[0][6] = 1.0
-    if "right" in llm_output:
+    if "move right" in llm_output:
         actions[0][7] = 1.0
-    if "squat" in llm_output:
+    if "crouch" in llm_output:
+        actions[0][5] = 1.0
+    if "crouch right" in llm_output:
+        actions[0][7] = 1.0
+        actions[0][5] = 1.0
+    if "crouch left" in llm_output:
+        actions[0][6] = 1.0
         actions[0][5] = 1.0
     if "jump" in llm_output:
         actions[0][4] = 1.0
-    if "punch" in llm_output or "attack" in llm_output or "hit" in llm_output or "strike" in llm_output:
+    if "jump right" in llm_output:
+        actions[0][4] = 1.0
+        actions[0][7] = 1.0
+    if "jump left" in llm_output:
+        actions[0][4] = 1.0
+        actions[0][6] = 1.0
+    if "punch" in llm_output:
         actions[0][11] = 1.0
         actions.append([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
     if "kick" in llm_output:
@@ -86,6 +98,21 @@ class StreetFighterOnlineDataset(Dataset):
         observation = {"frame": self.obs}
         self.observer.observe(observation)
         context = self.observer.context_prompt()
+        action_descriptions = {
+        "punch": "a quick attack that deals moderate damage to the opponent if close enough.",
+        "kick": "a powerful attack with longer reach than a punch but slightly slower execution.",
+        "move left": "shifts your position to the left, potentially avoiding an opponent's attack.",
+        "move right": "shifts your position to the right, potentially avoiding an opponent's attack.",
+        "crouch": "lowers your stance, dodging high attacks and preparing for defensive or low attacks.",
+        "crouch right": "moves right while crouched, evading high attacks and positioning for a counter.",
+        "crouch left": "moves left while crouched, evading high attacks and positioning for a counter.",
+        "jump": "leaps upward, avoiding low attacks and creating opportunities for aerial assaults.",
+        "jump right": "jumps to the right, covering distance and evading low threats.",
+        "jump left": "jumps to the left, covering distance and evading low threats."
+        }
+        action_list_description = "Here are your possible movements and their effects: "
+        for action, description in action_descriptions.items():
+            action_list_description += f"\n- {action.capitalize()}: {description}"
         sample = {}
         # prompt = f"In Street Fighter, we want to be aggressive and defeat the enemy. Given {context} The available actions are: punch, kick, move left, move right, squat, jump, the best single action to take now is to"
         # sample["review"] = prompt
@@ -93,7 +120,7 @@ class StreetFighterOnlineDataset(Dataset):
         # sample["query"] = tokenizer.decode(sample["input_ids"])
         # sample["label"] = torch.as_tensor(0)
 
-        prompt = f"[INST] You are playing Street Fighter, your goal is to defeat the opponent. This is the current game state: {context} Your available movements are in this list: [punch, kick, move-left, move-right, squat, jump]. Pick one best movement to take from the list. Just answer in one word.[/INST]"
+        prompt = f"[INST] You are playing Street Fighter, your goal is to defeat the opponent. This is the current game state: {context} Your available movements are in this list: Your available movements are in this list: [punch, kick, move left, move right, crouch, crouch right, crouch left, jump, jump right, jump left]. {action_list_description}. Pick one best movement to take from the list. Just constrain your answer to one word such as 'punch'.[/INST]"
         sample = {}
         sample = tokenizer([prompt], return_tensors="pt").to("cuda")
         sample["query"] = tokenizer.batch_decode(sample["input_ids"])
@@ -152,8 +179,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     reward = 0
     text = batch["response"][0]
     query_text = query_texts[0]
-    print("Q:", query_text)
-    print("A:", text)
+
     # Hack to make the model learn to attack more
     if epoch < 10000 and ("punch" in text or "attack" in text or "hit" in text or "strike" in text or "kick" in text):
         reward += 0.1
@@ -173,4 +199,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
-ppo_trainer.save_pretrained("mistral_finetune")
+    if epoch % 100 == 0:
+        ppo_trainer.save_pretrained("mistral_finetune")
+

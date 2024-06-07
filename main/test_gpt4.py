@@ -14,27 +14,18 @@ import os
 import time 
 
 import retro
-from stable_baselines3 import PPO
-
+import io
+import base64
+import requests
 from street_fighter_custom_wrapper import StreetFighterCustomWrapper
 from PIL import Image
-# import requests
-from transformers import AutoProcessor, LlavaForConditionalGeneration
-
+API_KEY = ""
 
 RESET_ROUND = True  # Whether to reset the round when fight is over. 
 RENDERING = True    # Whether to render the game screen.
-
-MODEL_NAME = r"llava" # Specify the model file to load. Model "ppo_ryu_2500000_steps_updated" is capable of beating the final stage (Bison) of the game.
-
-# Model notes:
-# ppo_ryu_2000000_steps_updated: Just beginning to overfit state, generalizable but not quite capable.
-# ppo_ryu_2500000_steps_updated: Approaching the final overfitted state, cannot dominate first round but partially generalizable. High chance of beating the final stage.
-# ppo_ryu_3000000_steps_updated: Near the final overfitted state, almost dominate first round but barely generalizable.
-# ppo_ryu_7000000_steps_updated: Overfitted, dominates first round but not generalizable. 
-
+MODEL_NAME = r"gpt-4o" # Specify the model file to load. Model "ppo_ryu_2500000_steps_updated" is capable of beating the final stage (Bison) of the game.
 RANDOM_ACTION = False
-NUM_EPISODES = 30 # Make sure NUM_EPISODES >= 3 if you set RESET_ROUND to False to see the whole final stage game.
+NUM_EPISODES = 10 # Make sure NUM_EPISODES >= 3 if you set RESET_ROUND to False to see the whole final stage game.
 MODEL_DIR = r"trained_models/"
 
 def make_env(game, state):
@@ -49,35 +40,36 @@ def make_env(game, state):
         return env
     return _init
 
-game = "StreetFighterIISpecialChampionEdition-Genesis"
-env = make_env(game, state="Champion.Level12.RyuVsBison")()
-# model = PPO("CnnPolicy", env)
-
-# if not RANDOM_ACTION:
-#     model = PPO.load(os.path.join(MODEL_DIR, MODEL_NAME), env=env)
-if not RANDOM_ACTION:
-    # 如果你使用的是linyiLYi提供的模型
-    keys = ['high', 'low', 'bounded_above', 'bounded_below']
-    setattr(env.observation_space, '_shape', (3,100,128))
-    for k in keys:
-        new_attr = getattr(env.observation_space, k).reshape(3,100,128)
-        setattr(env.observation_space, k, new_attr)
-
-    model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf").to("cuda:0")
-    processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+# Function to encode the image
+def encode_image(image):
+    buffered = io.BytesIO()
+    image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def get_llm_actions(llm_output):
-    llm_output = llm_output.split("ASSISTANT")[1]
+    #llm_output = llm_output.split("ASSISTANT")[1]
     llm_output = llm_output.lower()
     actions = [[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]
-    if "left" in llm_output:
+    if "move left" in llm_output:
         actions[0][6] = 1.0
-    if "right" in llm_output:
+    if "move right" in llm_output:
         actions[0][7] = 1.0
-    if "squad" in llm_output:
+    if "crouch" in llm_output:
+        actions[0][5] = 1.0
+    if "crouch right" in llm_output:
+        actions[0][7] = 1.0
+        actions[0][5] = 1.0
+    if "crouch left" in llm_output:
+        actions[0][6] = 1.0
         actions[0][5] = 1.0
     if "jump" in llm_output:
         actions[0][4] = 1.0
+    if "jump right" in llm_output:
+        actions[0][4] = 1.0
+        actions[0][7] = 1.0
+    if "jump left" in llm_output:
+        actions[0][4] = 1.0
+        actions[0][6] = 1.0
     if "punch" in llm_output:
         actions[0][11] = 1.0
         actions.append([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
@@ -92,6 +84,17 @@ def get_llm_actions(llm_output):
     # quick kick = [0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
     # heavy kick = [1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] -> [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
     return actions
+
+
+game = "StreetFighterIISpecialChampionEdition-Genesis"
+env = make_env(game, state="Champion.Level12.RyuVsBison")()
+if not RANDOM_ACTION:
+    # 如果你使用的是linyiLYi提供的模型
+    keys = ['high', 'low', 'bounded_above', 'bounded_below']
+    setattr(env.observation_space, '_shape', (3,100,128))
+    for k in keys:
+        new_attr = getattr(env.observation_space, k).reshape(3,100,128)
+        setattr(env.observation_space, k, new_attr)
 
 obs = env.reset()
 done = False
@@ -117,13 +120,38 @@ for _ in range(num_episodes):
             obs, reward, done, info = env.step(env.action_space.sample())
         else:
             image = Image.fromarray(obs.astype('uint8'), 'RGB')
-
-            prompt = "USER: <image>\nYou are the white cloth player in street fighter game. Given the game state image, think about where is the opponent and where you are, what is the one best action from {left, right, squad, jump, punch, kick}? ASSISTANT:"
-            inputs = processor(text=prompt, images=image, return_tensors="pt").to("cuda:0")
-
-            output = model.generate(**inputs, max_new_tokens=100)
-            llm_output = processor.decode(output[0], skip_special_tokens=True)
-            print(llm_output)
+            base64_image = encode_image(image)
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {API_KEY}"
+            }
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                    "role": "user",
+                    "content": [
+                        {
+                        "type": "text",
+                        "text": "You are the white cloth player in street fighter game. Given the game state image, think about where is the opponent and where you are, what is the one best action from {move left, move right, crouch, crouch right, crouch left, jump, jump right, jump left, punch, kick}? only answer with one action."
+                        },
+                        {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                        }
+                    ]
+                    }
+                ],
+                "max_tokens": 10
+            }
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+            if response.status_code != 200:
+                print("Failed to get a valid response:", response.status_code)
+                print("Response content:", response.text)
+            llm_output = response.json()['choices'][0]['message']['content']
+            #print(llm_output)  # Optionally print the response for debugging
             actions = get_llm_actions(llm_output)
             for action in actions:
                 obs, reward, done, info = env.step(action)
