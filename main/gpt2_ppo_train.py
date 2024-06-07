@@ -14,11 +14,12 @@ from trl.core import LengthSampler
 import retro
 from street_fighter_custom_wrapper import StreetFighterCustomWrapper
 from observer import Observer
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 MODEL = "gpt2"
 RESET_ROUND = True  # Whether to reset the round when fight is over. 
 RENDERING = False    # Whether to render the game screen.
-def make_env(game, state):
+def make_env(game, state, seed=None):
     def _init():
         env = retro.make(
             game=game, 
@@ -26,6 +27,8 @@ def make_env(game, state):
             use_restricted_actions=retro.Actions.FILTERED,
             obs_type=retro.Observations.IMAGE
         )
+        if seed is not None:
+            env.seed(seed)
         env = StreetFighterCustomWrapper(env, reset_round=RESET_ROUND, rendering=RENDERING)
         return env
     return _init
@@ -61,14 +64,18 @@ sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_si
 
 
 class StreetFighterOnlineDataset(Dataset):
-    def __init__(self, config):
+    def __init__(self, config, num_envs=1):
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        self.env = make_env(game, state="Champion.Level12.RyuVsBison")()
+        #self.env = make_env(game, state="Champion.Level12.RyuVsBison")()
+        self.env = SubprocVecEnv([make_env(game, state="Champion.Level12.RyuVsBison", seed=i) for i in range(2)])
         self.obs = self.env.reset()
+        self.num_envs = num_envs
+        # self.obs = [env.reset() for env in self.envs]
         RYU_GREY = [168, 168, 168]
         GUILE_RED = [232, 32, 32]
         self.observer = Observer(RYU_GREY, GUILE_RED)
+        #self.observers = [Observer(RYU_GREY, GUILE_RED) for _ in range(num_envs)]
 
     def __len__(self):
         return 1000000
@@ -77,15 +84,38 @@ class StreetFighterOnlineDataset(Dataset):
         observation = {"frame": self.obs}
         self.observer.observe(observation)
         context = self.observer.context_prompt()
-        sample = {}
-        prompt = f"In Street Fighter, we want to be aggressive and defeat the enemy. Given {context} The available actions are: punch, kick, move left, move right, squat, jump, the best single action to take now is to"
-        sample["review"] = prompt
-        sample["input_ids"] = torch.as_tensor(tokenizer.encode(prompt)[: len(prompt)])
-        sample["query"] = tokenizer.decode(sample["input_ids"])
-        sample["label"] = torch.as_tensor(0)
-        return sample
+        # sample = {}
+        prompt = [f"In Street Fighter, we want to be aggressive and defeat the enemy. Given {context} The available actions are: punch, kick, move left, move right, squat, jump, the best single action to take now is to"
+                   for _ in range(self.num_envs)
+        ]
+        # sample["review"] = prompt
+        # sample["input_ids"] = torch.as_tensor(tokenizer.encode(prompt)[: len(prompt)])
+        # sample["query"] = tokenizer.decode(sample["input_ids"])
+        # sample["label"] = torch.as_tensor(0)
+        batch_samples = []
+        for prompt in prompts:
+            input_ids = self.tokenizer.encode(prompt, return_tensors='pt')
+            sample = {
+                "review": prompt,
+                "input_ids": input_ids,
+                "query": self.tokenizer.decode(input_ids.squeeze()),
+                "label": torch.tensor(0)  # You might need a method to generate labels based on actions taken and their outcomes
+            }
+            batch_samples.append(sample)
 
-dataset = StreetFighterOnlineDataset(config)
+        # Step environments in parallel
+        actions = [env.action_space.sample() for env in self.envs.envs]  # Example random actions
+        self.obs, rewards, dones, infos = self.envs.step(actions)
+
+        # Reset environments where done
+        for i in range(self.num_envs):
+            if dones[i]:
+                self.obs[i] = self.envs.envs[i].reset()
+
+        return batch_samples
+        #return sample
+    
+dataset = StreetFighterOnlineDataset(config, num_envs=2)
 
 
 def collator(data):
@@ -154,3 +184,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     if epoch % 1000 == 0:
         ppo_trainer.save_pretrained("gpt2_finetune")
+
+if __name__ == "__main__":
+    pass
